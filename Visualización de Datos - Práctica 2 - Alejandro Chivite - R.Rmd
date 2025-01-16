@@ -1,0 +1,413 @@
+---
+title: "Visualización de Datos - Práctica 2 - Alejandro Chivite"
+author: "Alejandro Chivite"
+date: "2025-01-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Instalación de paquetes. 
+
+```{r}
+if (!require("devtools")) install.packages("devtools"); library(devtools)
+if (!require("dplyr")) install.packages("dplyr"); library(dplyr)
+if (!require("tidyr")) install.packages("tidyr"); library(tidyr)
+if (!require("countrycode")) install.packages("countrycode"); library(countrycode)
+if (!require("ggplot2")) install.packages("ggplot2"); library(ggplot2)
+```
+
+# Carga del conjunto de datos principal. 
+
+```{r}
+devtools::install_github("vdeminstitute/vdemdata")
+vdem_df <- vdemdata::vdem
+```
+
+# Carga de los conjuntos de datos adicionales.
+
+```{r}
+gdp_df <- read.csv("Countries GDP 1960-2020.csv")
+ppp_df <- read.csv("PPP conversion factor.csv", skip = 4)
+```
+
+# Selección de variables de interés del conjunto de datos principal. 
+
+```{r}
+vdem_variables_list <- c(
+  "country_name",
+  "country_text_id",
+  "year",
+  "v2x_polyarchy",
+  "v2x_libdem",
+  "v2x_partipdem",
+  "v2x_delibdem",
+  "v2x_egaldem",
+  "v2x_freexp_altinf",
+  "v2x_frassoc_thick",
+  "v2clacjstm",
+  "v2clacjstw",
+  "v2clacjust",
+  "v2clsocgrp",
+  "v2cldiscm",
+  "v2cldiscw",
+  "v2clacfree",
+  "v2clrelig",
+  "v2clfmove",
+  "v2cldmovem",
+  "v2cldmovew",
+  "v2clprptym",
+  "v2clprptyw")
+
+selected_variables_vdem_df <- vdem_df %>%
+  select(all_of(vdem_variables_list))
+```
+
+# Normalización de nombres de países.
+
+```{r}
+name_mapping <- c(
+  "Burma/Myanmar" = "Myanmar",
+  "Cote d'Ivoire" = "Ivory Coast",
+  "Democratic Republic of the Congo" = "Congo, Dem. Rep.",
+  "Republic of the Congo" = "Congo, Rep.",
+  "Iran, Islamic Rep." = "Iran",
+  "Korea, Dem. People's Rep." = "North Korea",
+  "Korea, Rep." = "South Korea",
+  "Türkiye" = "Turkey",
+  "Turkiye" = "Turkey",
+  "Venezuela, RB" = "Venezuela",
+  "Viet Nam" = "Vietnam",
+  "West Bank and Gaza" = "Palestine",
+  "Yemen, Rep." = "Yemen",
+  "Cape Verde" = "Cabo Verde",
+  "Cabo Verde" = "Cabo Verde",
+  "Egypt, Arab Rep." = "Egypt",
+  "Hong Kong SAR, China" = "Hong Kong",
+  "Gambia, The" = "The Gambia",
+  "Gambia" = "The Gambia",
+  "Lao PDR" = "Laos",
+  "Kyrgyz Republic" = "Kyrgyzstan",
+  "Russian Federation" = "Russia",
+  "Slovak Republic" = "Slovakia",
+  "Syrian Arab Republic" = "Syria",
+  "United States of America" = "United States",
+  "Bahamas, The" = "Bahamas",
+  "St. Martin (French part)" = "Saint Martin",
+  "St. Kitts and Nevis" = "Saint Kitts and Nevis",
+  "St. Lucia" = "Saint Lucia",
+  "St. Vincent and the Grenadines" = "Saint Vincent and the Grenadines",
+  "Virgin Islands (U.S.)" = "United States Virgin Islands",
+  "Sint Maarten (Dutch part)" = "Sint Maarten",
+  "Macau SAR, China" = "Macau",
+  "Myanmar" = "Myanmar"
+)
+
+selected_variables_vdem_df <- selected_variables_vdem_df %>%
+  mutate(country_name = ifelse(country_name %in% names(name_mapping),
+                               name_mapping[country_name],
+                               country_name))
+
+gdp_df <- gdp_df %>%
+  mutate(Country.Name = ifelse(Country.Name %in% names(name_mapping),
+                               name_mapping[Country.Name],
+                               Country.Name))
+
+ppp_df <- ppp_df %>%
+  mutate(Country.Name = ifelse(Country.Name %in% names(name_mapping),
+                               name_mapping[Country.Name],
+                               Country.Name))
+```
+
+# Unión de los datasets. 
+
+```{r}
+colnames(gdp_df) <- gsub("^X", "", colnames(gdp_df))
+colnames(ppp_df) <- gsub("^X", "", colnames(ppp_df))
+
+gdp_long <- gdp_df %>%
+  pivot_longer(
+    cols = -c(Country.Name, Country.Code),
+    names_to = "year",
+    values_to = "gdp"
+  )
+ppp_df <- ppp_df[, colSums(is.na(ppp_df)) < nrow(ppp_df)]
+
+ppp_long <- ppp_df %>%
+  pivot_longer(
+    cols = -c(Country.Name, Country.Code, Indicator.Name, Indicator.Code), 
+    names_to = "year",
+    values_to = "ppp"
+  )
+
+gdp_long <- gdp_long %>%
+  rename(country_name = Country.Name)
+
+ppp_long <- ppp_long %>%
+  rename(country_name = Country.Name)
+
+gdp_long$year <- as.numeric(gdp_long$year)
+ppp_long$year <- as.numeric(ppp_long$year)
+selected_variables_vdem_df$year <- as.numeric(selected_variables_vdem_df$year)
+
+selected_variables_vdem_df <- selected_variables_vdem_df %>%
+  left_join(gdp_long, by = c("country_name", "year"))
+
+selected_variables_vdem_df <- selected_variables_vdem_df %>%
+  left_join(ppp_long, by = c("country_name", "year"))
+```
+
+# Selección final
+
+```{r}
+selected_variables_vdem_df <- selected_variables_vdem_df %>%
+  select(-Country.Code.x, -Country.Code.y, -Indicator.Name, -Indicator.Code)
+```
+
+# Cálculo del tipo de gobierno.
+
+```{r}
+selected_variables_vdem_df <- selected_variables_vdem_df %>%
+  mutate(
+    mean_score = rowMeans(select(., v2x_polyarchy, v2x_libdem, v2x_partipdem, v2x_delibdem, v2x_egaldem), na.rm = TRUE),
+    
+    government_type = case_when(
+      mean_score >= 0 & mean_score < 0.25 ~ "Régimen autoritario",
+      mean_score >= 0.25 & mean_score < 0.5 ~ "Régimen Híbrido",
+      mean_score >= 0.5 & mean_score < 0.75 ~ "Democracia Defectuosa",
+      mean_score >= 0.75 ~ "Democracia Plena"
+    )
+  )
+```
+
+# Obtención del continente de cada país.
+
+```{r}
+selected_variables_vdem_df <- selected_variables_vdem_df %>%
+  mutate(continent = countrycode(sourcevar = country_name, origin = "country.name", destination = "continent"))
+```
+# Comprobación de países sin continente. 
+
+```{r}
+missing_continents <- selected_variables_vdem_df %>%
+  filter(is.na(continent)) %>%
+  select(country_name)
+
+historical_countries <- data.frame(
+  country_name = c(
+    "South Yemen", "Kosovo", "German Democratic Republic", "Zanzibar", "Baden",
+    "Bavaria", "Modena", "Parma", "Saxony", "Tuscany", "Würtemberg", 
+    "Two Sicilies", "Hanover", "Hesse-Kassel", "Hesse-Darmstadt", 
+    "Mecklenburg Schwerin", "Hamburg", "Brunswick", "Oldenburg", 
+    "Saxe-Weimar-Eisenach", "Nassau", "Piedmont-Sardinia"
+  ),
+  continent = c(
+    "Asia", "Europe", "Europe", "Africa", "Europe", 
+    "Europe", "Europe", "Europe", "Europe", "Europe", "Europe",
+    "Europe", "Europe", "Europe", "Europe", 
+    "Europe", "Europe", "Europe", "Europe", 
+    "Europe", "Europe", "Europe"
+  )
+)
+
+selected_variables_vdem_df <- selected_variables_vdem_df %>%
+  left_join(historical_countries, by = "country_name", suffix = c("", ".historical"))
+
+selected_variables_vdem_df <- selected_variables_vdem_df %>%
+  mutate(
+    continent = ifelse(is.na(continent), continent.historical, continent)
+  ) %>%
+  select(-continent.historical)
+
+missing_continents <- selected_variables_vdem_df %>%
+  filter(is.na(continent)) %>%
+  select(country_name)
+
+print(missing_continents)
+```
+
+# Conversión de las variables textuales a factor.
+
+```{r}
+selected_variables_vdem_df$country_name <- as.factor(selected_variables_vdem_df$country_name)
+selected_variables_vdem_df$government_type <- as.factor(selected_variables_vdem_df$government_type)
+selected_variables_vdem_df$continent <- as.factor(selected_variables_vdem_df$continent)
+```
+
+# Tipos de gobierno en 2023. 
+
+```{r}
+totals_by_government_2023 <- selected_variables_vdem_df %>%
+  filter(year == 2023) %>% 
+  group_by(government_type) %>%
+  summarise(total = n(), .groups = "drop")
+
+print(totals_by_government_2023)
+```
+
+# Evolución de tipos de gobierno.
+
+```{r}
+totals_by_year_and_government <- selected_variables_vdem_df %>%
+  filter(year >= 1970 & year <= 2023) %>% 
+  group_by(year, government_type) %>%      
+  summarise(total = n(), .groups = "drop")
+
+totals_by_year_and_government
+
+ggplot(totals_by_year_and_government, aes(x = year, y = total, color = government_type, group = government_type)) +
+  geom_line(size = 1) +
+  labs(title = "Tipos de gobierno por año (1970-2023)",
+       x = "Año",
+       y = "Número de países",
+       color = "Tipo de Gobierno") +
+  theme_minimal()
+```
+
+# Medidas de libertad por tipo de gobierno.
+
+```{r}
+liberty_means_2023 <- selected_variables_vdem_df %>%
+  filter(year == 2023) %>%
+  group_by(government_type) %>%
+  summarise(
+    v2x_freexp_altinf = mean(v2x_freexp_altinf, na.rm = TRUE),
+    v2x_frassoc_thick = mean(v2x_frassoc_thick, na.rm = TRUE),
+    v2clrelig = mean(v2clrelig, na.rm = TRUE),
+    v2cldiscm = mean(v2cldiscm, na.rm = TRUE),
+    v2cldmovem = mean(v2cldmovem, na.rm = TRUE),
+    v2clprptym = mean(v2clprptym, na.rm = TRUE)
+  )
+
+write.csv(liberty_means_2023, "liberty_means_2023.csv", row.names = FALSE)
+```
+
+# Resultado pivotado.
+
+```{r}
+liberty_means_transposed <- liberty_means_2023 %>%
+  pivot_longer(
+    cols = -government_type,
+    names_to = "measure",
+    values_to = "value" 
+  ) %>%
+  pivot_wider(
+    names_from = government_type,  
+    values_from = value
+  )
+
+write.csv(liberty_means_transposed, "liberty_means_transposed.csv", row.names = FALSE)
+```
+
+# Medidas de libertad mujeres y minorías.
+
+```{r}
+equity_means_2023 <- selected_variables_vdem_df %>%
+  filter(year == 2023) %>%  
+  group_by(government_type) %>%  
+  summarise(
+    v2clacjstw = mean(v2clacjstw, na.rm = TRUE),   
+    v2cldmovew = mean(v2cldmovew, na.rm = TRUE),
+    v2clprptyw = mean(v2clprptyw, na.rm = TRUE), 
+    v2clsocgrp = mean(v2clsocgrp, na.rm = TRUE), 
+    v2clacjust = mean(v2clacjust, na.rm = TRUE)   
+  )
+
+equity_means_transposed <- equity_means_2023 %>%
+  pivot_longer(
+    cols = -government_type,  
+    names_to = "measure",    
+    values_to = "value" 
+  ) %>%
+  pivot_wider(
+    names_from = government_type, 
+    values_from = value 
+  )
+
+write.csv(equity_means_transposed, "equity_means_transposed.csv", row.names = FALSE)
+```
+
+# PIB medio por año y tipo de gobierno.
+
+```{r}
+gdp_by_year_and_gov <- selected_variables_vdem_df %>%
+  filter(year >= 1970 & year <= 2020) %>% 
+  group_by(year, government_type) %>%  
+  summarise(mean_gdp = mean(gdp, na.rm = TRUE), .groups = "drop") %>% 
+  pivot_wider(
+    names_from = year, 
+    values_from = mean_gdp
+  )
+
+print(gdp_by_year_and_gov)
+options(scipen = 999) 
+
+write.csv(gdp_by_year_and_gov, "gdp_by_year_and_gov.csv", row.names = FALSE)
+```
+
+# PPP medio por año y tipo de gobierno. 
+
+```{r}
+ppp_by_year_and_gov <- selected_variables_vdem_df %>%
+  filter(year >= 1990 & year <= 2023) %>% 
+  group_by(year, government_type) %>% 
+  summarise(mean_ppp = mean(ppp, na.rm = TRUE), .groups = "drop") %>%  
+  pivot_wider(
+    names_from = year,       
+    values_from = mean_ppp  
+  )
+
+print(ppp_by_year_and_gov)
+options(scipen = 999)
+
+write.csv(ppp_by_year_and_gov, "ppp_mean_by_year_and_gov.csv", row.names = FALSE)
+```
+
+# Top 10 democracias.
+
+```{r}
+top_10_democracies <- selected_variables_vdem_df %>%
+  filter(year == 2020, government_type == "Democracia Plena") %>% 
+  select(country_name, mean_score, gdp, ppp) %>%
+  arrange(desc(mean_score)) %>% 
+  slice_head(n = 10) 
+print(top_10_democracies)
+```
+
+# Comparación modelos exitosos. 
+
+```{r}
+
+selected_countries_data <- selected_variables_vdem_df %>%
+  filter(year == 2020, country_name %in% c("China", "Singapore", "Norway", "Ireland")) %>%
+  select(
+    country_name,
+    government_type,
+    ppp,
+    gdp,
+    v2x_freexp_altinf,
+    v2x_frassoc_thick,
+    v2clrelig,
+    v2cldiscm,
+    v2cldmovem,
+    v2clprptym,
+    v2clacjstw
+  )
+
+selected_countries_data_transformed <- selected_countries_data %>%
+  mutate(
+    v2x_freexp_altinf = v2x_freexp_altinf + 5,
+    v2x_frassoc_thick = v2x_frassoc_thick + 5,
+    v2clrelig = v2clrelig + 5,
+    v2cldiscm = v2cldiscm + 5,
+    v2cldmovem = v2cldmovem + 5,
+    v2clprptym = v2clprptym + 5,
+    v2clacjstw = v2clacjstw + 5
+  )
+
+print(selected_countries_data_transformed)
+options(scipen = 999)
+write.csv(selected_countries_data_transformed, "selected_countries_data_transformed.csv", row.names = FALSE)
+```
